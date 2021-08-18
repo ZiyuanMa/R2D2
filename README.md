@@ -15,7 +15,7 @@ python3 test.py
 ```
 ## Result
 The code was trained and tested in Atari game 'Boxing'
- ![image](https://github.com/ZiyuanMa/R2D2/blob/master/images/Boxing.jpg)
+ ![image](https://github.com/ZiyuanMa/R2D2/blob/main/images/Boxing.jpg)
 
 
 
