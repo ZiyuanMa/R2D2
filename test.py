@@ -6,20 +6,19 @@ import numpy as np
 from collections import deque
 import matplotlib.pyplot as plt
 from model import Network
-from environment import creat_env
+from environment import create_env
 import config
 device = torch.device('cpu')
 torch.set_num_threads(4)
 
-def test(env_name=config.EnvConfig.env_name, save_interval = config.save_interval, test_epsilon=config.test_epsilon,
+def test(game_name=config.game_name, save_interval = config.save_interval, test_epsilon=config.test_epsilon,
         show=False, save_plot=config.save_plot):
 
-    env = creat_env(noop_start=True)
+    env = create_env(noop_start=True, clip_rewards=False)
     test_round = 5
     pool = mp.Pool(test_round)
     x1, x2, y = [], [], []
 
-    # network = Network(env.action_space.n)
     network = Network(env.action_space.n)
     network.to(device)
     network.share_memory()
@@ -41,7 +40,7 @@ def test(env_name=config.EnvConfig.env_name, save_interval = config.save_interva
         checkpoint += 1
     
     plt.figure(figsize=(12, 6))
-    plt.title(env_name)
+    plt.title(game_name)
 
     plt.subplot(1, 2, 1)
     plt.xlabel('training steps')
@@ -56,7 +55,7 @@ def test(env_name=config.EnvConfig.env_name, save_interval = config.save_interva
     plt.show()
     
     if save_plot:
-        plt.savefig('./{}.jpg'.format(env_name))
+        plt.savefig('./{}.jpg'.format(game_name))
 
 def test_one_case(args):
     network, env = args

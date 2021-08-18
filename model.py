@@ -2,35 +2,32 @@
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-from config import *
+import config
 
 
 class Network(nn.Module):
-    def __init__(self, action_dim, network_config: NetworkConfig = NetworkConfig(), env_config: EnvConfig = EnvConfig()):
+    def __init__(self, action_dim, obs_shape=config.obs_shape, hidden_dim=config.hidden_dim, cnn_out_dim=config.cnn_out_dim):
         super().__init__()
 
         # 84 x 84 input
 
-        self.hidden_dim = network_config.recurrent_dim
-
-        self.action_dim = env_config.action_dim
-        self.obs_shape = env_config.obs_shape
+        self.action_dim = action_dim
+        self.obs_shape = obs_shape
+        self.hidden_dim = hidden_dim
+        self.cnn_out_dim = cnn_out_dim
 
         self.max_forward_steps = 5
 
         self.feature = nn.Sequential(
-            nn.Conv2d(env_config.frame_stack, 32, 8, 4),
+            nn.Conv2d(config.frame_stack, 32, 8, 4),
             nn.ReLU(True),
             nn.Conv2d(32, 64, 4, 2),
             nn.ReLU(True),
             nn.Conv2d(64, 64, 3, 1),
             nn.ReLU(True),
             nn.Flatten(),
-            nn.Linear(3136, 1024),
+            nn.Linear(3136, self.cnn_out_dim),
         )
-
-        test_obs = torch.zeros((1, *self.obs_shape))
-        self.cnn_out_dim = self.feature(test_obs).size()[1]
 
         self.recurrent = nn.LSTM(self.cnn_out_dim+self.action_dim, self.hidden_dim, batch_first=True)
         self.hidden_state = (torch.zeros((1, 1, self.hidden_dim)), torch.zeros((1, 1, self.hidden_dim)))
@@ -60,12 +57,10 @@ class Network(nn.Module):
         val = self.value(hidden)
         q_value = val + adv - adv.mean(1, keepdim=True)
 
-        return q_value.numpy()
+        return q_value
 
     @torch.no_grad()
     def step(self, obs, last_action):
-
-        # assert last_action.size() == (1, self.action_dim), last_action.size()
 
         latent = self.feature(obs)
 

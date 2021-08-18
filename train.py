@@ -9,7 +9,7 @@ import config
 torch.manual_seed(0)
 np.random.seed(0)
 random.seed(0)
-torch.set_num_threads(2)
+torch.set_num_threads(1)
 
 def get_epsilon(actor_id: int, base_eps: float = config.base_eps, alpha: float = config.alpha, num_actors: int = config.num_actors):
     exponent = 1 + actor_id / (num_actors-1) * alpha
@@ -44,7 +44,3 @@ if __name__ == '__main__':
 
     train()
 
-# #%%
-# import ray
-# import ray.rllib.agents.
-# rllib train --env=MsPacman-v0 --run=APEX-DQN --config '{"num_workers": 16, "framework": torch}'

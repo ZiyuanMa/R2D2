@@ -78,60 +78,14 @@ class WarpFrame(gym.ObservationWrapper):
         return obs
 
 
-class FrameStack(gym.Wrapper):
-    def __init__(self, env, k):
-        """Stack k last frames.
-        Returns lazy array, which is much more memory efficient.
-        See Also
-        --------
-        baselines.common.atari_wrappers.LazyFrames
-        """
-        gym.Wrapper.__init__(self, env)
-        self.k = k
-        self.frames = deque([], maxlen=k)
-        shp = env.observation_space.shape
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=((shp[0] * k,)+shp[1:]), dtype=env.observation_space.dtype)
+def create_env(env_name=config.game_name+config.env_type, noop_start=True, clip_rewards=True):
 
-    def reset(self):
-        ob = self.env.reset()
-        for _ in range(self.k):
-            self.frames.append(ob)
-        return self._get_ob()
-
-    def step(self, action):
-        ob, reward, done, info = self.env.step(action)
-        self.frames.append(ob)
-        return self._get_ob(), reward, done, info
-
-    def _get_ob(self):
-        assert len(self.frames) == self.k
-        return np.concatenate(list(self.frames))
-
-
-def creat_env(env_config=config.EnvConfig, noop_start=True, clip_rewards=False, frame_stack=False, num_stack_frames=config.frame_stack):
-
-    env = gym.make(env_config.env_name+env_config.env_type)
+    env = gym.make(env_name)
 
     env = WarpFrame(env)
     if clip_rewards:
         env = ClipRewardEnv(env)
-    if frame_stack:
-        env = FrameStack(env, num_stack_frames)
     if noop_start:
         env = NoopResetEnv(env)
 
     return env
-
-
-#%%
-nums = [0,1,2]
-results = [[]]
-
-for i in nums:
-    for result in results.copy():
-        result = result.copy()
-        result.append(i)
-        results.append(result)
-        
-
-# %%
