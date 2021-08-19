@@ -24,8 +24,8 @@ def test(game_name=config.game_name, save_interval = config.save_interval, test_
     network.share_memory()
     checkpoint = 0
     
-    while os.path.exists('./models/Boxing{}.pth'.format(checkpoint)):
-        state_dict, training_steps, env_steps = torch.load('./models/Boxing{}.pth'.format(checkpoint))
+    while os.path.exists(f'./models/{game_name}{checkpoint}.pth'):
+        state_dict, training_steps, env_steps = torch.load(f'./models/{game_name}{checkpoint}.pth')
         x1.append(training_steps)
         x2.append(env_steps)
         network.load_state_dict(state_dict)
@@ -67,18 +67,19 @@ def test_one_case(args):
     sum_reward = 0
     while not done:
 
-        # obs = torch.from_numpy(obs.astype(np.float32)).unsqueeze(0)
         obs = np.stack(obs_history).astype(np.float32)
         obs = torch.from_numpy(obs).unsqueeze(0)
         obs = obs / 255
         action, _, _ = network.step(obs, last_action)
 
-        if random.random() < 0.01:
+        if random.random() < config.test_epsilon:
             action = env.action_space.sample()
 
         next_obs, reward, done, _ = env.step(action)
         # print(next_obs)
         obs_history.append(next_obs)
+        last_action.fill_(0)
+        last_action[0, action] = 1
         sum_reward += reward
 
     return sum_reward
