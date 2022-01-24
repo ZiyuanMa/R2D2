@@ -53,34 +53,28 @@ class WarpFrame(gym.ObservationWrapper):
         self._width = width
         self._height = height
 
-        original_space = self.observation_space
         self.observation_space = gym.spaces.Box(
             low=0,
             high=255,
-            shape=(self._height, self._width),
+            shape=(1, self._height, self._width),
             dtype=np.uint8,
         )
 
-        assert original_space.dtype == np.uint8 and len(original_space.shape) == 3
-
     def observation(self, obs):
 
-        frame = obs
-
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-
-        frame = cv2.resize(
-            frame, (self._width, self._height), interpolation=cv2.INTER_AREA
+        obs = cv2.resize(
+            obs, (self._width, self._height), interpolation=cv2.INTER_AREA
         )
 
-        obs = frame
+        obs = np.expand_dims(obs, 0)
 
         return obs
 
 
-def create_env(env_name=config.game_name+config.env_type, noop_start=True, clip_rewards=True):
+def create_env(env_name=config.game_name, noop_start=True, clip_rewards=True):
 
-    env = gym.make(env_name)
+    env = gym.make(f'ALE/{env_name}-v5', obs_type='grayscale', frameskip=4, 
+                    repeat_action_probability=0, full_action_space=False)
 
     env = WarpFrame(env)
     if clip_rewards:
@@ -89,3 +83,4 @@ def create_env(env_name=config.game_name+config.env_type, noop_start=True, clip_
         env = NoopResetEnv(env)
 
     return env
+
