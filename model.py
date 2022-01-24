@@ -1,8 +1,27 @@
 '''Neural network model'''
+from dataclasses import dataclass, field
+from typing import Tuple, Optional
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 import config
+
+@dataclass
+class AgentState:
+    obs: torch.Tensor
+    action_dim: int
+    last_action: torch.Tensor = field(init=False)
+    last_reward: torch.Tensor = torch.zeros((1, 1), dtype=torch.float32)
+    hidden_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+
+    def __post_init__(self):
+        self.last_action = torch.zeros((1, self.action_dim), dtype=torch.float32)
+    
+    def update(self, obs, last_action, last_reward, hidden):
+        self.obs = torch.from_numpy(obs).unsqueeze(0)
+        self.last_action = torch.tensor([[1 if i == last_action else 0 for i in range(self.action_dim)]])
+        self.last_reward = torch.tensor([[last_reward]], dtype=torch.float32)
+        self.hidden_state = hidden
 
 
 class Network(nn.Module):
@@ -19,18 +38,19 @@ class Network(nn.Module):
         self.max_forward_steps = 5
 
         self.feature = nn.Sequential(
-            nn.Conv2d(config.frame_stack, 32, 8, 4),
+            nn.Conv2d(1, 32, 8, 4),
             nn.ReLU(True),
             nn.Conv2d(32, 64, 4, 2),
             nn.ReLU(True),
             nn.Conv2d(64, 64, 3, 1),
             nn.ReLU(True),
             nn.Flatten(),
-            nn.Linear(3136, self.cnn_out_dim),
+            nn.Linear(3136, 512),
+            nn.ReLU(True),
         )
 
-        self.recurrent = nn.LSTM(self.cnn_out_dim+self.action_dim, self.hidden_dim, batch_first=True)
-        self.hidden_state = (torch.zeros((1, 1, self.hidden_dim)), torch.zeros((1, 1, self.hidden_dim)))
+        self.recurrent = nn.LSTM(512+self.action_dim+1, self.hidden_dim, batch_first=True)
+        self.hidden_state = None
 
         self.advantage = nn.Sequential(
             nn.Linear(self.hidden_dim, self.hidden_dim),
@@ -44,12 +64,13 @@ class Network(nn.Module):
             nn.Linear(self.hidden_dim, 1)
         )
 
-    def forward(self, obs, last_action, hidden):
-        latent = self.feature(obs)
+    def forward(self, state: AgentState):
 
-        recurrent_input = torch.cat((latent, last_action), dim=1).unsqueeze(0)
+        latent = self.feature(state.obs / 255)
 
-        _, recurrent_output = self.recurrent(recurrent_input, hidden)
+        recurrent_input = torch.cat((latent, state.last_action, state.last_reward), dim=1).unsqueeze(0)
+
+        _, recurrent_output = self.recurrent(recurrent_input, state.hidden_state)
 
         hidden = recurrent_output[0].squeeze(1)
 
@@ -57,44 +78,25 @@ class Network(nn.Module):
         val = self.value(hidden)
         q_value = val + adv - adv.mean(1, keepdim=True)
 
-        return q_value
+        return q_value, recurrent_output
 
     @torch.no_grad()
-    def step(self, obs, last_action):
-
-        latent = self.feature(obs)
-
-        recurrent_input = torch.cat((latent, last_action), dim=1).unsqueeze(0)
-
-        _, self.hidden_state = self.recurrent(recurrent_input, self.hidden_state)
-
-        hidden = self.hidden_state[0].squeeze(1)
-
-        adv = self.advantage(hidden)
-        val = self.value(hidden)
-        q_value = val + adv - adv.mean(1, keepdim=True)
-
-        action = torch.argmax(q_value, 1).item()
-
-        return action, q_value.numpy(), torch.cat(self.hidden_state, dim=0).squeeze(1).numpy()
-
-    def reset(self):
-        self.hidden_state = (torch.zeros((1, 1, self.hidden_dim)), torch.zeros((1, 1, self.hidden_dim)))
-
-    @torch.no_grad()
-    def caculate_q_(self, obs, last_action, hidden_state, burn_in_steps, learning_steps, forward_steps):
+    def caculate_q_(self, obs, last_action, last_reward, hidden_state, burn_in_steps, learning_steps, forward_steps):
         # obs shape: (batch_size, seq_len, obs_shape)
         batch_size, max_seq_len, *_ = obs.size()
 
         obs = obs.reshape(-1, *self.obs_shape)
         last_action = last_action.view(-1, self.action_dim)
-
+        last_reward = last_reward.view(-1, 1)
         latent = self.feature(obs)
 
         seq_len = burn_in_steps + learning_steps + forward_steps
 
-        recurrent_input = torch.cat((latent, last_action), dim=1)
+        recurrent_input = torch.cat((latent, last_action, last_reward), dim=1)
         recurrent_input = recurrent_input.view(batch_size, max_seq_len, -1)
+        # print(recurrent_input.size())
+        # print(hidden_state[0].size())
+        # print()
         recurrent_input = pack_padded_sequence(recurrent_input, seq_len, batch_first=True, enforce_sorted=False)
 
         # self.recurrent.flatten_parameters()
@@ -123,18 +125,19 @@ class Network(nn.Module):
         return q_value
 
 
-    def caculate_q(self, obs, last_action, hidden_state, burn_in_steps, learning_steps):
+    def caculate_q(self, obs, last_action, last_reward, hidden_state, burn_in_steps, learning_steps):
         # obs shape: (batch_size, seq_len, obs_shape)
         batch_size, max_seq_len, *_ = obs.size()
 
         obs = obs.reshape(-1, *self.obs_shape)
         last_action = last_action.view(-1, self.action_dim)
+        last_reward = last_reward.view(-1, 1)
 
         latent = self.feature(obs)
 
         seq_len = burn_in_steps + learning_steps
 
-        recurrent_input = torch.cat((latent, last_action), dim=1)
+        recurrent_input = torch.cat((latent, last_action, last_reward), dim=1)
         recurrent_input = recurrent_input.view(batch_size, max_seq_len, -1)
         recurrent_input = pack_padded_sequence(recurrent_input, seq_len, batch_first=True, enforce_sorted=False)
 
