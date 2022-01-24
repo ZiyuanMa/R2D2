@@ -1,8 +1,13 @@
 
+from dataclasses import dataclass
+
+
+
+
 game_name = 'Boxing'
-env_type = 'Deterministic-v4'
-frame_stack = 4
-obs_shape = (frame_stack, 84, 84)
+frameskip = 4
+repeat_action_probability = 0
+obs_shape = (1, 84, 84)
 
 
 lr = 1e-4
@@ -24,7 +29,7 @@ block_length = 400  # cut one episode to numbers of blocks to improve the buffer
 
 amp = False # mixed precision training
 
-num_actors = 10
+num_actors = 8
 base_eps = 0.4
 alpha = 7
 log_interval = 20
@@ -42,7 +47,3 @@ cnn_out_dim = 1024
 render = False
 save_plot = True
 test_epsilon = 0.01
-
-
-
-
