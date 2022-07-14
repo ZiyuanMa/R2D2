@@ -10,7 +10,7 @@ def create_ptree(capacity: int) -> Tuple[int, np.ndarray]:
     ptree = np.zeros(2**num_layers-1, dtype=np.float64)
     return num_layers, ptree
 
-@nb.jit(nopython=True, cache=True)
+# @nb.jit(nopython=True, cache=True)
 def ptree_update(num_layers: int, ptree: np.ndarray, prio_exponent: float, td_error: np.ndarray, idxes: np.ndarray):
     priorities = td_error ** prio_exponent
 
@@ -23,7 +23,7 @@ def ptree_update(num_layers: int, ptree: np.ndarray, prio_exponent: float, td_er
         ptree[idxes] = ptree[2*idxes+1] + ptree[2*idxes+2]
 
 
-@nb.jit(nopython=True, cache=True)
+# @nb.jit(nopython=True, cache=True)
 def ptree_sample(num_layers: int, ptree: np.ndarray, is_exponent: float, num_samples: int) -> Tuple[np.ndarray, np.ndarray]:
     p_sum = ptree[0]
     interval = p_sum / num_samples

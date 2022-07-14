@@ -1,5 +1,5 @@
 numpy
-numba
+numba==0.55.2
 torch
-ray
-gym
+ray==1.13.0
+gym[atari, accept-rom-license]

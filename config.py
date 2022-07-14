@@ -32,7 +32,7 @@ amp = False # mixed precision training
 num_actors = 8
 base_eps = 0.4
 alpha = 7
-log_interval = 20
+log_interval = 10
 
 # sequence setting
 burn_in_steps = 40

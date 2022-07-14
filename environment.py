@@ -1,6 +1,5 @@
 '''open.ai gym environment wrapper.
 reference: https://github.com/openai/gym/tree/master/gym/wrappers'''
-from collections import deque
 import gym
 import numpy as np
 import cv2
@@ -23,7 +22,7 @@ class NoopResetEnv(gym.Wrapper):
         if self.override_num_noops is not None:
             noops = self.override_num_noops
         else:
-            noops = self.unwrapped.np_random.randint(1, self.noop_max + 1) #pylint: disable=E1101
+            noops = np.random.randint(1, self.noop_max + 1) #pylint: disable=E1101
         assert noops > 0
         obs = None
         for _ in range(noops):
@@ -35,13 +34,6 @@ class NoopResetEnv(gym.Wrapper):
     def step(self, action):
         return self.env.step(action)
 
-class ClipRewardEnv(gym.RewardWrapper):
-    def __init__(self, env):
-        gym.RewardWrapper.__init__(self, env)
-
-    def reward(self, reward):
-        """cilp reward in range [-1, 1]."""
-        return np.clip(reward, -1, 1)
 
 
 class WarpFrame(gym.ObservationWrapper):
@@ -71,14 +63,12 @@ class WarpFrame(gym.ObservationWrapper):
         return obs
 
 
-def create_env(env_name=config.game_name, noop_start=True, clip_rewards=True):
+def create_env(env_name=config.game_name, noop_start=True):
 
     env = gym.make(f'ALE/{env_name}-v5', obs_type='grayscale', frameskip=4, 
                     repeat_action_probability=0, full_action_space=False)
 
     env = WarpFrame(env)
-    if clip_rewards:
-        env = ClipRewardEnv(env)
     if noop_start:
         env = NoopResetEnv(env)
 

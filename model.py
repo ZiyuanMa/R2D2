@@ -99,7 +99,7 @@ class Network(nn.Module):
         # print()
         recurrent_input = pack_padded_sequence(recurrent_input, seq_len, batch_first=True, enforce_sorted=False)
 
-        # self.recurrent.flatten_parameters()
+        self.recurrent.flatten_parameters()
         recurrent_output, _ = self.recurrent(recurrent_input, hidden_state)
 
         recurrent_output, _ = pad_packed_sequence(recurrent_output, batch_first=True)
@@ -111,7 +111,7 @@ class Network(nn.Module):
         for hidden_seq, start_idx, end_idx, padding_length in zip(recurrent_output, seq_start_idx, seq_len, forward_pad_steps):
             hidden.append(hidden_seq[start_idx:end_idx])
             if padding_length > 0:
-                hidden.append(hidden_seq[end_idx-1].repeat(padding_length, 1))
+                hidden.append(hidden_seq[end_idx-1:end_idx].repeat(padding_length, 1))
 
         hidden = torch.cat(hidden)
         # hidden = torch.cat([torch.cat((hidden[start_idx:end_idx], hidden[end_idx-1].repeat(pad_len, 1)))  for hidden, start_idx, end_idx, pad_len in zip(recurrent_output, seq_start_idx, seq_len, forward_pad_steps)])
@@ -141,6 +141,7 @@ class Network(nn.Module):
         recurrent_input = recurrent_input.view(batch_size, max_seq_len, -1)
         recurrent_input = pack_padded_sequence(recurrent_input, seq_len, batch_first=True, enforce_sorted=False)
 
+        # self.recurrent.flatten_parameters()
         recurrent_output, _ = self.recurrent(recurrent_input, hidden_state)
 
         recurrent_output, _ = pad_packed_sequence(recurrent_output, batch_first=True)
@@ -153,4 +154,3 @@ class Network(nn.Module):
         q_value = val + adv - adv.mean(1, keepdim=True)
 
         return q_value
-
