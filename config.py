@@ -22,12 +22,12 @@ prio_exponent = 0.9
 importance_sampling_exponent = 0.6
 
 training_steps = 100000
-buffer_capacity = 500000
+buffer_capacity = 1000000
 max_episode_steps = 27000
 actor_update_interval = 400
 block_length = 400  # cut one episode to numbers of blocks to improve the buffer space utilization
 
-amp = False # mixed precision training
+amp = True # mixed precision training
 
 num_actors = 8
 base_eps = 0.4
@@ -36,7 +36,7 @@ log_interval = 10
 
 # sequence setting
 burn_in_steps = 40
-learning_steps = 10
+learning_steps = 40
 forward_steps = 5
 seq_len = burn_in_steps + learning_steps + forward_steps
 
