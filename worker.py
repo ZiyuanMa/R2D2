@@ -12,14 +12,13 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
-from torch.optim import Adam
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import numba as nb
 from model import Network, AgentState
 from environment import create_env
-from priority_tree import create_ptree, ptree_sample, ptree_update
+from priority_tree import PriorityTree
 import config
 
 writer = SummaryWriter()
@@ -55,16 +54,12 @@ class ReplayBuffer:
 
         self.block_ptr = 0
 
-        # prioritized experience replay
-        self.num_layers, self.priority_tree = create_ptree(self.num_sequences)
-        self.prio_exponent = alpha
-        self.is_exponent = beta
+        self.priority_tree = PriorityTree(self.num_sequences, alpha, beta)
 
         self.batch_size = batch_size
 
         self.env_steps = 0
         
-
         self.num_episodes = 0
         self.episode_reward = 0
 
@@ -78,6 +73,8 @@ class ReplayBuffer:
         self.num_new_transitions = 0
 
         self.buffer = [None] * self.num_blocks
+
+        self.steps = np.zeros((self.num_blocks, self.num_sequences, 4), dtype=np.uint8)
 
     def __len__(self):
         return self.size
@@ -96,20 +93,7 @@ class ReplayBuffer:
 
             idxes = np.arange(self.block_ptr*self.seq_pre_block, (self.block_ptr+1)*self.seq_pre_block, dtype=np.int64)
 
-            ptree_update(self.num_layers, self.priority_tree, self.prio_exponent, priority, idxes)
-
-            # self.obs_buf[curr_block_ptr] = np.copy(block[0])
-            # self.last_action_buf[curr_block_ptr] = np.copy(block[1])
-            # self.hidden_buf[curr_block_ptr, :block[7]] = block[2]
-            # self.act_buf[curr_block_ptr] = np.copy(block[3])
-            # self.rew_buf[curr_block_ptr] = np.copy(block[4])
-            # self.gamma_buf[curr_block_ptr] = np.copy(block[5])
-
-            # self.seq_pre_block_buf[curr_block_ptr] = block[7]
-
-            # self.burn_in_steps[curr_block_ptr, :block[7]] = block[8]
-            # self.learning_steps[curr_block_ptr, :block[7]] = block[9]
-            # self.forward_steps[curr_block_ptr, :block[7]] = block[10]
+            self.priority_tree.update(idxes, priority)
 
             if self.buffer[self.block_ptr] is not None:
                 self.size -= np.sum(self.buffer[self.block_ptr].learning_steps).item()
@@ -119,8 +103,6 @@ class ReplayBuffer:
             self.num_new_transitions += np.sum(block.learning_steps).item()
 
             self.buffer[self.block_ptr] = block
-
-            # assert block.oar.shape[0] == block.last_action.shape[0]
 
             self.env_steps += np.sum(block.learning_steps, dtype=np.int32)
 
@@ -136,10 +118,10 @@ class ReplayBuffer:
 
         with self.lock:
 
-            idxes, is_weights = ptree_sample(self.num_layers, self.priority_tree, self.is_exponent, self.batch_size)
+            idxes, is_weights = self.priority_tree.sample(self.batch_size)
+
             block_idxes = idxes // self.seq_pre_block
             sequence_idxes = idxes % self.seq_pre_block
-
 
 
             for block_idx, sequence_idx  in zip(block_idxes, sequence_idxes):
@@ -155,12 +137,12 @@ class ReplayBuffer:
                 start_idx = block.burn_in_steps[0]+np.sum(block.learning_steps[:sequence_idx]).item()
 
                 assert start_idx-burn_in_step >= 0, start_idx-burn_in_step
+
                 oar = block.oar[start_idx-burn_in_step:start_idx+learning_step+forward_step]
                 obs, last_action, last_reward = zip(*oar)
                 obs = torch.stack(obs)
                 last_action = torch.cat(last_action)
                 last_reward = torch.FloatTensor(last_reward)
-
                 
                 start_idx = np.sum(block.learning_steps[:sequence_idx])
                 end_idx = start_idx + block.learning_steps[sequence_idx]
@@ -229,14 +211,12 @@ class ReplayBuffer:
                 idxes = idxes[mask]
                 td_errors = td_errors[mask]
 
-            # self.priority_tree.batch_update(np.copy(idxes), np.copy(priorities)**self.alpha)
-            ptree_update(self.num_layers, self.priority_tree, self.prio_exponent, td_errors, idxes)
+            self.priority_tree.update(idxes, td_errors)
 
         self.num_training_steps += 1
         self.sum_loss += loss
 
     def ready(self):
-        # print(type(len(self)))
         if self.size >= config.learning_starts:
             return True
         else:
@@ -287,7 +267,7 @@ class Learner:
         self.online_net.train()
         self.target_net = deepcopy(self.online_net)
         self.target_net.eval()
-        self.optimizer = Adam(self.online_net.parameters(), lr=lr, eps=eps)
+        self.optimizer = torch.optim.Adam(self.online_net.parameters(), lr=lr, eps=eps)
         self.loss_fn = nn.MSELoss(reduction='none')
         self.grad_norm = grad_norm
         self.buffer = buffer
@@ -349,24 +329,9 @@ class Learner:
 
             batch_hidden = (batch_hidden[:1], batch_hidden[1:])
 
-            if self.device == torch.device('cuda'):
-                with autocast(enabled=self.amp):
-                    
-                    # stack observation and preprocess
-                    batch_obs = batch_obs / 255
-
-                    # double q learning
-                    batch_action_ = self.online_net.caculate_q_(batch_obs, batch_last_action, batch_last_reward, batch_hidden, burn_in_steps, learning_steps, forward_steps).argmax(1).unsqueeze(1)
-                    batch_q_ = self.target_net.caculate_q_(batch_obs, batch_last_action, batch_last_reward, batch_hidden, burn_in_steps, learning_steps, forward_steps).gather(1, batch_action_).squeeze(1)
-                    
-                    target_q = self.value_rescale(batch_n_step_reward + batch_n_step_gamma * self.inverse_value_rescale(batch_q_))
-                    # target_q = batch_n_step_reward + batch_n_step_gamma * batch_q_
-
-                    batch_q = self.online_net.caculate_q(batch_obs, batch_last_action, batch_last_reward, batch_hidden, burn_in_steps, learning_steps).gather(1, batch_action).squeeze(1)
-                    
-                    loss = 0.5 * (is_weights * self.loss_fn(batch_q, target_q)).mean()
-            else:
-
+            with autocast(enabled=self.amp):
+                
+                # stack observation and preprocess
                 batch_obs = batch_obs / 255
 
                 # double q learning
@@ -375,6 +340,7 @@ class Learner:
                 
                 target_q = self.value_rescale(batch_n_step_reward + batch_n_step_gamma * self.inverse_value_rescale(batch_q_))
                 # target_q = batch_n_step_reward + batch_n_step_gamma * batch_q_
+
                 batch_q = self.online_net.caculate_q(batch_obs, batch_last_action, batch_last_reward, batch_hidden, burn_in_steps, learning_steps).gather(1, batch_action).squeeze(1)
                 
                 loss = 0.5 * (is_weights * self.loss_fn(batch_q, target_q)).mean()
@@ -411,7 +377,7 @@ class Learner:
             
             # save model 
             if self.num_updates % self.save_interval == 0:
-                torch.save((self.online_net.state_dict(), self.num_updates, env_steps), os.path.join('models', '{}{}.pth'.format(self.game_name, self.counter//self.save_interval)))
+                torch.save((self.online_net.state_dict(), self.num_updates, env_steps), os.path.join('models', '{}{}.pth'.format(self.game_name, self.num_updates)))
 
     @staticmethod
     def value_rescale(value, eps=1e-2):
@@ -511,14 +477,7 @@ class LocalBuffer:
         max_qval = np.max(qval_buffer[max_forward_steps:self.size+1], axis=1)
         max_qval = np.pad(max_qval, (0, max_forward_steps-1), 'edge')
         target_qval = qval_buffer[np.arange(self.size), actions]
-        # print(n_step_reward.shape)
-        # print(n_step_gamma.shape)
-        # print(max_qval.shape)
-        # print(target_qval.shape)
-        # print(len(n_step_reward))
-        # print(len(n_step_gamma))
-        # print(len(max_qval))
-        # print(len(target_qval))
+
         td_errors = np.abs(n_step_reward + n_step_gamma * max_qval - target_qval, dtype=np.float32)
         priorities = np.zeros(self.block_length//self.learning_steps, dtype=np.float32)
         priorities[:num_sequences] = caculate_mixed_td_errors(td_errors, learning_steps)
