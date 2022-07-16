@@ -19,8 +19,8 @@ class AgentState:
     
     def update(self, obs, last_action, last_reward, hidden):
         self.obs = torch.from_numpy(obs).unsqueeze(0)
-        self.last_action = torch.tensor([[1 if i == last_action else 0 for i in range(self.action_dim)]])
-        self.last_reward = torch.tensor([[last_reward]], dtype=torch.float32)
+        self.last_action = torch.FloatTensor([[1 if i == last_action else 0 for i in range(self.action_dim)]])
+        self.last_reward = torch.FloatTensor([[last_reward]])
         self.hidden_state = hidden
 
 
@@ -35,7 +35,7 @@ class Network(nn.Module):
         self.hidden_dim = hidden_dim
         self.cnn_out_dim = cnn_out_dim
 
-        self.max_forward_steps = 5
+        self.max_forward_steps = config.forward_steps
 
         self.feature = nn.Sequential(
             nn.Conv2d(1, 32, 8, 4),
@@ -50,7 +50,6 @@ class Network(nn.Module):
         )
 
         self.recurrent = nn.LSTM(512+self.action_dim+1, self.hidden_dim, batch_first=True)
-        self.hidden_state = None
 
         self.advantage = nn.Sequential(
             nn.Linear(self.hidden_dim, self.hidden_dim),
@@ -68,11 +67,12 @@ class Network(nn.Module):
 
         latent = self.feature(state.obs / 255)
 
-        recurrent_input = torch.cat((latent, state.last_action, state.last_reward), dim=1).unsqueeze(0)
+        recurrent_input = torch.cat((latent, state.last_action, state.last_reward), dim=1)
 
         _, recurrent_output = self.recurrent(recurrent_input, state.hidden_state)
 
-        hidden = recurrent_output[0].squeeze(1)
+        # print(recurrent_output[0].size())
+        hidden = recurrent_output[0]
 
         adv = self.advantage(hidden)
         val = self.value(hidden)
@@ -80,7 +80,6 @@ class Network(nn.Module):
 
         return q_value, recurrent_output
 
-    @torch.no_grad()
     def caculate_q_(self, obs, last_action, last_reward, hidden_state, burn_in_steps, learning_steps, forward_steps):
         # obs shape: (batch_size, seq_len, obs_shape)
         batch_size, max_seq_len, *_ = obs.size()
@@ -94,9 +93,7 @@ class Network(nn.Module):
 
         recurrent_input = torch.cat((latent, last_action, last_reward), dim=1)
         recurrent_input = recurrent_input.view(batch_size, max_seq_len, -1)
-        # print(recurrent_input.size())
-        # print(hidden_state[0].size())
-        # print()
+
         recurrent_input = pack_padded_sequence(recurrent_input, seq_len, batch_first=True, enforce_sorted=False)
 
         self.recurrent.flatten_parameters()

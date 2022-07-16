@@ -65,8 +65,7 @@ class WarpFrame(gym.ObservationWrapper):
 
 def create_env(env_name=config.game_name, noop_start=True):
 
-    env = gym.make(f'ALE/{env_name}-v5', obs_type='grayscale', frameskip=4, 
-                    repeat_action_probability=0, full_action_space=False)
+    env = gym.make(f'ALE/{env_name}-v5', obs_type='grayscale', frameskip=4, repeat_action_probability=0, full_action_space=False)
 
     env = WarpFrame(env)
     if noop_start:

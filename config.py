@@ -13,7 +13,7 @@ obs_shape = (1, 84, 84)
 lr = 1e-4
 eps = 1e-3
 grad_norm = 40
-batch_size = 128
+batch_size = 64
 learning_starts = 50000
 save_interval = 500
 target_net_update_interval = 2000
@@ -27,7 +27,7 @@ max_episode_steps = 27000
 actor_update_interval = 400
 block_length = 400  # cut one episode to numbers of blocks to improve the buffer space utilization
 
-amp = True # mixed precision training
+amp = False # mixed precision training
 
 num_actors = 8
 base_eps = 0.4

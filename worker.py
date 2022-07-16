@@ -28,7 +28,9 @@ writer = SummaryWriter()
 
 @dataclass
 class Block:
-    oar: List
+    obs: torch.Tensor
+    last_action: torch.Tensor
+    last_reward: torch.Tensor
     action: np.array
     n_step_reward: np.array
     gamma: np.array
@@ -70,17 +72,17 @@ class ReplayBuffer:
         self.lock = threading.Lock()
 
         self.size = 0
-        self.num_new_transitions = 0
+        self.last_size = 0
 
         self.buffer = [None] * self.num_blocks
 
-        self.steps = np.zeros((self.num_blocks, self.num_sequences, 4), dtype=np.uint8)
+        self.steps = np.zeros((self.num_blocks, self.num_sequences, 3), dtype=np.uint8)
 
     def __len__(self):
         return self.size
 
 
-    def add(self, block: Block, priority: np.array):
+    def add(self, block: Block, priority: np.array, episode_reward: float):
         '''Call by actors to add data to replaybuffer
 
         Args:
@@ -100,16 +102,14 @@ class ReplayBuffer:
 
             self.size += np.sum(block.learning_steps).item()
 
-            self.num_new_transitions += np.sum(block.learning_steps).item()
-
             self.buffer[self.block_ptr] = block
 
             self.env_steps += np.sum(block.learning_steps, dtype=np.int32)
 
             self.block_ptr = (self.block_ptr+1) % self.num_blocks
-            # if block[11]:
-            #     self.episode_reward += block[11]
-            #     self.num_episodes += 1
+            if episode_reward:
+                self.episode_reward += episode_reward
+                self.num_episodes += 1
 
     def sample_batch(self):
         '''sample one batch of training data'''
@@ -134,15 +134,13 @@ class ReplayBuffer:
                 
                 assert sequence_idx < block.num_sequences, 'index is {} but size is {}'.format(sequence_idx, self.seq_pre_block_buf[block_idx])
                 
-                start_idx = block.burn_in_steps[0]+np.sum(block.learning_steps[:sequence_idx]).item()
+                start_idx = block.burn_in_steps[0] + np.sum(block.learning_steps[:sequence_idx])
 
-                assert start_idx-burn_in_step >= 0, start_idx-burn_in_step
-
-                oar = block.oar[start_idx-burn_in_step:start_idx+learning_step+forward_step]
-                obs, last_action, last_reward = zip(*oar)
-                obs = torch.stack(obs)
-                last_action = torch.cat(last_action)
-                last_reward = torch.FloatTensor(last_reward)
+                # oar = block.oar[start_idx-burn_in_step:start_idx+learning_step+forward_step]
+                # obs, last_action, last_reward = zip(*oar)
+                obs = block.obs[start_idx-burn_in_step:start_idx+learning_step+forward_step]
+                last_action = block.last_action[start_idx-burn_in_step:start_idx+learning_step+forward_step]
+                last_reward = block.last_reward[start_idx-burn_in_step:start_idx+learning_step+forward_step]
                 
                 start_idx = np.sum(block.learning_steps[:sequence_idx])
                 end_idx = start_idx + block.learning_steps[sequence_idx]
@@ -176,15 +174,15 @@ class ReplayBuffer:
             batch_obs,
             batch_last_action,
             batch_last_reward,
-            torch.from_numpy(np.array(batch_hidden)).transpose(0, 1),
+            torch.from_numpy(np.stack(batch_hidden)).transpose(0, 1),
 
-            torch.LongTensor(np.concatenate(batch_action)).unsqueeze(1),
+            torch.from_numpy(np.concatenate(batch_action)).unsqueeze(1),
             torch.from_numpy(np.concatenate(batch_reward)),
             torch.from_numpy(np.concatenate(batch_gamma)),
 
-            torch.from_numpy(np.array(burn_in_steps)),
-            torch.from_numpy(np.array(learning_steps)),
-            torch.from_numpy(np.array(forward_steps)),
+            torch.ByteTensor(burn_in_steps),
+            torch.ByteTensor(learning_steps),
+            torch.ByteTensor(forward_steps),
 
             idxes,
             torch.from_numpy(is_weights.astype(np.float32)),
@@ -224,11 +222,12 @@ class ReplayBuffer:
 
     def log(self, log_interval):
         print(f'buffer size: {self.size}')
-        print(f'buffer update speed: {(self.num_new_transitions)/log_interval}/s')
-        self.num_new_transitions = 0
+        print(f'buffer update speed: {(self.size-self.last_size)/log_interval}/s')
+        self.last_size = self.size
         print(f'number of environment steps: {self.env_steps}')
         if self.num_episodes != 0:
             print(f'average episode return: {self.episode_reward/self.num_episodes:.4f}')
+            # print(f'average episode return: {self.episode_reward/self.num_episodes:.4f}')
             self.episode_reward = 0
             self.num_episodes = 0
         print(f'number of training steps: {self.num_training_steps}')
@@ -243,7 +242,7 @@ class ReplayBuffer:
 
 ############################## Learner ##############################
 
-@nb.jit(nopython=True, cache=True)
+# @nb.jit(nopython=True, cache=True)
 def caculate_mixed_td_errors(td_error, learning_steps):
     
     start_idx = 0
@@ -290,7 +289,7 @@ class Learner:
         for k, v in state_dict.items():
             state_dict[k] = v.cpu()
         self.weights_id = ray.put((state_dict, self.num_updates))
-
+        # self.weights_id = state_dict
     def run(self):
         background_thread = threading.Thread(target=self.prepare_data, daemon=True)
         background_thread.start()
@@ -326,24 +325,26 @@ class Learner:
 
             batch_obs, batch_last_action = batch_obs.float(), batch_last_action.float()
             batch_action = batch_action.long()
+            burn_in_steps, learning_steps, forward_steps = burn_in_steps, learning_steps, forward_steps
 
             batch_hidden = (batch_hidden[:1], batch_hidden[1:])
 
-            with autocast(enabled=self.amp):
+            # with autocast(enabled=self.amp):
                 
-                # stack observation and preprocess
-                batch_obs = batch_obs / 255
+            # stack observation and preprocess
+            batch_obs = batch_obs / 255
 
-                # double q learning
+            # double q learning
+            with torch.no_grad():
                 batch_action_ = self.online_net.caculate_q_(batch_obs, batch_last_action, batch_last_reward, batch_hidden, burn_in_steps, learning_steps, forward_steps).argmax(1).unsqueeze(1)
                 batch_q_ = self.target_net.caculate_q_(batch_obs, batch_last_action, batch_last_reward, batch_hidden, burn_in_steps, learning_steps, forward_steps).gather(1, batch_action_).squeeze(1)
-                
-                target_q = self.value_rescale(batch_n_step_reward + batch_n_step_gamma * self.inverse_value_rescale(batch_q_))
-                # target_q = batch_n_step_reward + batch_n_step_gamma * batch_q_
+            
+            target_q = self.value_rescale(batch_n_step_reward + batch_n_step_gamma * self.inverse_value_rescale(batch_q_))
+            # target_q = batch_n_step_reward + batch_n_step_gamma * batch_q_
 
-                batch_q = self.online_net.caculate_q(batch_obs, batch_last_action, batch_last_reward, batch_hidden, burn_in_steps, learning_steps).gather(1, batch_action).squeeze(1)
-                
-                loss = 0.5 * (is_weights * self.loss_fn(batch_q, target_q)).mean()
+            batch_q = self.online_net.caculate_q(batch_obs, batch_last_action, batch_last_reward, batch_hidden, burn_in_steps, learning_steps).gather(1, batch_action).squeeze(1)
+            
+            loss = (is_weights * self.loss_fn(batch_q, target_q)).mean()
 
             
             td_errors = (target_q-batch_q).detach().clone().squeeze().abs().cpu().float().numpy()
@@ -364,12 +365,14 @@ class Learner:
                 nn.utils.clip_grad_norm_(self.online_net.parameters(), self.grad_norm)
                 self.optimizer.step()
 
+
             self.num_updates += 1
 
             self.buffer.update_priorities.remote(idxes, priorities, old_ptr, loss.item())
 
             # store new weights in shared memory
-            self.store_weights()
+            if self.num_updates % 4 == 0:
+                self.store_weights()
 
             # update target net
             if self.num_updates % self.target_net_update_interval == 0:
@@ -378,6 +381,8 @@ class Learner:
             # save model 
             if self.num_updates % self.save_interval == 0:
                 torch.save((self.online_net.state_dict(), self.num_updates, env_steps), os.path.join('models', '{}{}.pth'.format(self.game_name, self.num_updates)))
+
+            # del data
 
     @staticmethod
     def value_rescale(value, eps=1e-2):
@@ -410,8 +415,10 @@ class LocalBuffer:
         return self.size
     
     def reset(self, init_obs: np.ndarray):
-        self.oar_buffer = [(init_obs, F.one_hot(torch.LongTensor([0]), self.action_dim).bool(), 0)]
-        self.hidden_buffer = [np.zeros((2, 1, 1, self.hidden_dim))]
+        self.obs_buffer = [init_obs]
+        self.last_action_buffer = [torch.BoolTensor([1 if i == 0 else 0 for i in range(self.action_dim)])]
+        self.last_reward_buffer = [0]
+        self.hidden_buffer = [np.zeros((2, self.hidden_dim), dtype=np.float32)]
         self.action_buffer = []
         self.reward_buffer = []
         self.qval_buffer = []
@@ -421,10 +428,12 @@ class LocalBuffer:
         self.done = False
 
     def add(self, action: int, reward: float, next_obs: np.ndarray, q_value: np.ndarray, hidden_state: np.ndarray):
-        self.hidden_buffer.append(hidden_state)
         self.action_buffer.append(action)
         self.reward_buffer.append(reward)
-        self.oar_buffer.append((next_obs, F.one_hot(torch.LongTensor([action]), self.action_dim).bool(), reward))
+        self.hidden_buffer.append(hidden_state)
+        self.obs_buffer.append(next_obs)
+        self.last_action_buffer.append(np.array([1 if i == action else 0 for i in range(self.action_dim)], dtype=bool))
+        self.last_reward_buffer.append(reward)
         self.qval_buffer.append(q_value)
         self.sum_reward += reward
         self.size += 1
@@ -449,18 +458,14 @@ class LocalBuffer:
 
         n_step_gamma = np.array(n_step_gamma, dtype=np.float32)
 
-        oar = self.oar_buffer
+        obs = torch.from_numpy(np.stack(self.obs_buffer))
+        last_action = torch.from_numpy(np.stack(self.last_action_buffer))
+        last_reward = torch.FloatTensor(self.last_reward_buffer)
 
         # print(self.hidden_buffer[slice(0, self.size, self.learning_steps)])
-        hiddens = np.array(self.hidden_buffer[slice(0, self.size, self.learning_steps)], dtype=np.float32)
-        hiddens = hiddens.squeeze(3).squeeze(2)
-        # print(hiddens.dtype)
-        # assert hiddens.shape[0] == num_sequences, f'{hiddens.shape} {num_sequences}'
-        # print(len(self.action_buffer))
+        hiddens = np.stack(self.hidden_buffer[slice(0, self.size, self.learning_steps)])
+
         actions = np.array(self.action_buffer, dtype=np.uint8)
-
-
-        # actions = actions[self.curr_burn_in_steps:]
 
         qval_buffer = np.concatenate(self.qval_buffer)
         reward_buffer = self.reward_buffer + [0 for _ in range(self.forward_steps-1)]
@@ -483,20 +488,20 @@ class LocalBuffer:
         priorities[:num_sequences] = caculate_mixed_td_errors(td_errors, learning_steps)
 
         # save burn in information for next block
-        self.oar_buffer = self.oar_buffer[-self.burn_in_steps-1:]
+        # self.oar_buffer = self.oar_buffer[-self.burn_in_steps-1:]
+        self.obs_buffer = self.obs_buffer[-self.burn_in_steps-1:]
+        self.last_action_buffer = self.last_action_buffer[-self.burn_in_steps-1:]
+        self.last_reward_buffer = self.last_reward_buffer[-self.burn_in_steps-1:]
+        
         self.hidden_buffer = self.hidden_buffer[-self.burn_in_steps-1:]
         self.action_buffer.clear()
         self.reward_buffer.clear()
         self.qval_buffer.clear()
-        self.curr_burn_in_steps = len(self.oar_buffer)-1
-        # print(self.size)
+        self.curr_burn_in_steps = len(self.obs_buffer)-1
         self.size = 0
-        # print(n_step_reward.shape)
-        # print(n_step_reward.shape)
-        # print(actions.shape)
         
-        block = Block(oar, actions, n_step_reward, n_step_gamma, hiddens, num_sequences, burn_in_steps, learning_steps, forward_steps)
-        return block, priorities
+        block = Block(obs, last_action, last_reward, actions, n_step_reward, n_step_gamma, hiddens, num_sequences, burn_in_steps, learning_steps, forward_steps)
+        return [block, priorities, self.sum_reward if self.done else None]
 
 
 
@@ -545,8 +550,7 @@ class Actor:
                 episode_steps += 1
                 actor_steps += 1
 
-                self.local_buffer.add(action, reward, torch.from_numpy(next_obs), q_value.numpy(), 
-                                        np.array((hidden[0].numpy(), hidden[1].numpy())))
+                self.local_buffer.add(action, reward, next_obs, q_value.numpy(), torch.cat(hidden).numpy())
 
                 if done:
                     block = self.local_buffer.finish()
@@ -556,6 +560,8 @@ class Actor:
                         q_value, hidden = self.model(agent_state)
                     block = self.local_buffer.finish(q_value.numpy())
                     # print(block)
+                    if self.epsilon > 0.1:
+                        block[2] = None
                     self.replay_buffer.add.remote(*block)
 
                 if actor_steps % 400 == 0:
@@ -565,7 +571,8 @@ class Actor:
     def update_weights(self):
         '''load latest weights from learner'''
         weights_id = ray.get(self.learner.get_weights.remote())
-        weights, _ = ray.get(weights_id)
+        weights = ray.get(weights_id)
+        # weights = ray.get(self.learner.get_weights.remote())
         self.model.load_state_dict(weights)
 
     # def select_action(self, q_value: torch.Tensor) -> int:
@@ -576,8 +583,7 @@ class Actor:
     
     def reset(self):
         obs = self.env.reset()
-        # self.model.reset()
-        self.local_buffer.reset(torch.from_numpy(obs))
+        self.local_buffer.reset(obs)
 
         state = AgentState(torch.from_numpy(obs).unsqueeze(0), self.action_dim)
 

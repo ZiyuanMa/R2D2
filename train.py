@@ -17,7 +17,7 @@ def get_epsilon(actor_id: int, base_eps: float = config.base_eps, alpha: float =
 
 
 def train(num_actors=config.num_actors, log_interval=config.log_interval):
-    ray.init(num_gpus=1)
+    ray.init(num_gpus=1, include_dashboard=True)
 
     buffer = ReplayBuffer.remote()
     learner = Learner.remote(buffer)
