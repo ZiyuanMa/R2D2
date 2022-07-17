@@ -41,7 +41,6 @@ class Block:
     forward_steps: np.array
 
 
-@ray.remote(num_cpus=1)
 class ReplayBuffer:
     def __init__(self, buffer_capacity=config.buffer_capacity, sequence_len=config.block_length,
                 alpha=config.prio_exponent, beta=config.importance_sampling_exponent,
