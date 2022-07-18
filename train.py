@@ -1,9 +1,7 @@
 import random
-import time
-import multiprocessing as mp
+import torch.multiprocessing as mp
 import torch
 import numpy as np
-import ray
 from worker import Learner, Actor, ReplayBuffer
 from environment import create_env
 from model import Network
@@ -22,28 +20,37 @@ def get_epsilon(actor_id: int, base_eps: float = config.base_eps, alpha: float =
 def train(num_actors=config.num_actors, log_interval=config.log_interval):
 
     model = Network(create_env().action_space.n)
-    sample_queue_list = [mp.Queue(10) for _ in range(num_actors)]
+    model.share_memory()
+    sample_queue_list = [mp.Queue() for _ in range(num_actors)]
+    batch_queue = mp.Queue(8)
+    priority_queue = mp.Queue(8)
 
-    buffer = ReplayBuffer()
-    learner = Learner(buffer)
-    actors = [Actor(get_epsilon(i), learner, buffer) for i in range(num_actors)]
+    buffer = ReplayBuffer(sample_queue_list, batch_queue, priority_queue)
+    learner = Learner(batch_queue, priority_queue, model)
+    actors = [Actor(get_epsilon(i), model, sample_queue_list[i]) for i in range(num_actors)]
 
-    for actor in actors:
-        actor.run()
+    actor_procs = [mp.Process(target=actor.run) for actor in actors]
+    for proc in actor_procs:
+        proc.start()
 
-    while not ray.get(buffer.ready.remote()):
-        time.sleep(log_interval)
-        ray.get(buffer.log.remote(log_interval))
-        print()
+    buffer_proc = mp.Process(target=buffer.run)
+    buffer_proc.start()
 
-    print('start training')
     learner.run()
+    # while not buffer.ready():
+    #     time.sleep(log_interval)
+    #     buffer.log(log_interval)
+    #     print()
+    buffer_proc.join()
+
+    for proc in actor_procs:
+        proc.terminate()
+
+    # for proc in actor_procs:
+    #     proc.join()
+    # print('start training')
+    # learner.run()
     
-    done = False
-    while not done:
-        time.sleep(log_interval)
-        done = ray.get(buffer.log.remote(log_interval))
-        print()
 
 if __name__ == '__main__':
 

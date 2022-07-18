@@ -25,7 +25,7 @@ class AgentState:
 
 
 class Network(nn.Module):
-    def __init__(self, action_dim, obs_shape=config.obs_shape, hidden_dim=config.hidden_dim, cnn_out_dim=config.cnn_out_dim):
+    def __init__(self, action_dim, obs_shape=config.obs_shape, hidden_dim=config.hidden_dim):
         super().__init__()
 
         # 84 x 84 input
@@ -33,7 +33,6 @@ class Network(nn.Module):
         self.action_dim = action_dim
         self.obs_shape = obs_shape
         self.hidden_dim = hidden_dim
-        self.cnn_out_dim = cnn_out_dim
 
         self.max_forward_steps = config.forward_steps
 
@@ -46,7 +45,7 @@ class Network(nn.Module):
             nn.ReLU(True),
             nn.Flatten(),
             nn.Linear(3136, 512),
-            nn.ReLU(True),
+            # nn.ReLU(True),
         )
 
         self.recurrent = nn.LSTM(512+self.action_dim+1, self.hidden_dim, batch_first=True)
@@ -71,7 +70,6 @@ class Network(nn.Module):
 
         _, recurrent_output = self.recurrent(recurrent_input, state.hidden_state)
 
-        # print(recurrent_output[0].size())
         hidden = recurrent_output[0]
 
         adv = self.advantage(hidden)
@@ -80,7 +78,7 @@ class Network(nn.Module):
 
         return q_value, recurrent_output
 
-    def caculate_q_(self, obs, last_action, last_reward, hidden_state, burn_in_steps, learning_steps, forward_steps):
+    def calculate_q_(self, obs, last_action, last_reward, hidden_state, burn_in_steps, learning_steps, forward_steps):
         # obs shape: (batch_size, seq_len, obs_shape)
         batch_size, max_seq_len, *_ = obs.size()
 
@@ -111,7 +109,6 @@ class Network(nn.Module):
                 hidden.append(hidden_seq[end_idx-1:end_idx].repeat(padding_length, 1))
 
         hidden = torch.cat(hidden)
-        # hidden = torch.cat([torch.cat((hidden[start_idx:end_idx], hidden[end_idx-1].repeat(pad_len, 1)))  for hidden, start_idx, end_idx, pad_len in zip(recurrent_output, seq_start_idx, seq_len, forward_pad_steps)])
 
         assert hidden.size(0) == torch.sum(learning_steps)
 
@@ -122,7 +119,7 @@ class Network(nn.Module):
         return q_value
 
 
-    def caculate_q(self, obs, last_action, last_reward, hidden_state, burn_in_steps, learning_steps):
+    def calculate_q(self, obs, last_action, last_reward, hidden_state, burn_in_steps, learning_steps):
         # obs shape: (batch_size, seq_len, obs_shape)
         batch_size, max_seq_len, *_ = obs.size()
 
