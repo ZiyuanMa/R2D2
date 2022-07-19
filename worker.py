@@ -114,13 +114,10 @@ class ReplayBuffer:
         while self.size < config.learning_starts:
             time.sleep(1)
 
-        print('prepare')
-
         while True:
             if not self.batch_queue.full():
                 data = self.sample_batch()
                 self.batch_queue.put(data)
-            # print('add one')
             else:
                 time.sleep(0.1)
 
@@ -218,8 +215,6 @@ class ReplayBuffer:
 
             is_weights = np.repeat(is_weights, learning_steps)
 
-            # print(type(batch_obs))
-            # print(type(batch_obs[0]))
 
             data = (
                 batch_obs,
@@ -282,7 +277,7 @@ def calculate_mixed_td_errors(td_error, learning_steps):
 
 class Learner:
     def __init__(self, batch_queue, priority_queue, model, grad_norm: int = config.grad_norm,
-                lr: float = config.lr, eps:float = config.eps,
+                lr: float = config.lr, eps:float = config.eps, game_name: str = config.game_name,
                 target_net_update_interval: int = config.target_net_update_interval, save_interval: int = config.save_interval):
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -305,6 +300,8 @@ class Learner:
         self.batched_data = []
 
         self.shared_model = model
+
+        self.game_name = game_name
 
     def store_weights(self):
         self.shared_model.load_state_dict(self.online_net.state_dict())

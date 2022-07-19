@@ -37,20 +37,12 @@ def train(num_actors=config.num_actors, log_interval=config.log_interval):
     buffer_proc.start()
 
     learner.run()
-    # while not buffer.ready():
-    #     time.sleep(log_interval)
-    #     buffer.log(log_interval)
-    #     print()
+
     buffer_proc.join()
 
     for proc in actor_procs:
         proc.terminate()
 
-    # for proc in actor_procs:
-    #     proc.join()
-    # print('start training')
-    # learner.run()
-    
 
 if __name__ == '__main__':
 

@@ -45,7 +45,7 @@ class Network(nn.Module):
             nn.ReLU(True),
             nn.Flatten(),
             nn.Linear(3136, 512),
-            # nn.ReLU(True),
+            nn.ReLU(True),
         )
 
         self.recurrent = nn.LSTM(512+self.action_dim+1, self.hidden_dim, batch_first=True)
